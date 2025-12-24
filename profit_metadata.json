@@ -1,0 +1,43 @@
+{
+  "description": "PROFIT-OPTIMIZED dataset for NBA totals prediction",
+  "total_games": 1894,
+  "target_over_rate": 0.5274551214361141,
+  "simulated_line_mean": 224.53720215143133,
+  "residual_mean": 1.3735687039013178,
+  "columns": [
+    "GAME_ID",
+    "GAME_DATE",
+    "HOME_TEAM",
+    "AWAY_TEAM",
+    "HOME_PPG_10",
+    "AWAY_PPG_10",
+    "HOME_PACE_10",
+    "AWAY_PACE_10",
+    "LEAGUE_PACE_30D",
+    "SIMULATED_LINE",
+    "TOTAL_PTS",
+    "TARGET_OVER",
+    "RESIDUAL"
+  ],
+  "created_at": "2025-12-24T01:25:41.018979",
+  "leakage_prevented": true,
+  "home_advantage_used": 2.3,
+  "points_per_possession": 2.24,
+  "data_filters": {
+    "seasons": "2021-2025",
+    "start_date": "2021-11-15",
+    "residual_clip": [
+      -40,
+      40
+    ],
+    "min_rolling_games": 8
+  },
+  "profit_optimization": {
+    "line_weights": [
+      0.52,
+      0.48
+    ],
+    "target_over_range": "49-51%",
+    "validation_residual_mean": 1.3735687039013178
+  }
+}
