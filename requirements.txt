@@ -1,7 +1,8 @@
-streamlit==1.28.1
-pandas==2.0.3
-numpy==1.24.3
-xgboost==1.7.6
-requests==2.31.0
-plotly==5.17.0
-pytz==2023.3
+streamlit>=1.28.0,<1.35.0
+pandas>=2.1.0
+numpy>=1.24.0
+xgboost>=1.7.0,<2.0.0
+requests>=2.31.0
+plotly>=5.17.0
+pytz>=2023.3
+setuptools>=65.0.0  # Add this to fix distutils issue
