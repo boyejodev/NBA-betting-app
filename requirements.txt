@@ -6,3 +6,4 @@ requests>=2.31.0
 plotly>=5.17.0
 pytz>=2023.3
 setuptools>=65.0.0  # Add this to fix distutils issue
+joblib
