@@ -1,253 +1,133 @@
-{
- "cells": [
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "id": "b4d89ca1-8029-4c85-a8c0-b921b503cbae",
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# ========================================\n",
-    "# 🏀 NBA LIVE BETTING ENGINE (STREAMLIT)\n",
-    "# ========================================\n",
-    "\n",
-    "import requests\n",
-    "import pandas as pd\n",
-    "import numpy as np\n",
-    "import xgboost as xgb\n",
-    "import json\n",
-    "import os\n",
-    "import time\n",
-    "import logging\n",
-    "from datetime import datetime\n",
-    "from typing import Dict, List, Tuple\n",
-    "import pytz\n",
-    "import joblib\n",
-    "\n",
-    "# ========================================\n",
-    "# 📁 DIRECTORIES\n",
-    "# ========================================\n",
-    "DATA_DIR = \"data\"\n",
-    "MODEL_DIR = \"models\"\n",
-    "LOG_DIR = \"logs\"\n",
-    "\n",
-    "os.makedirs(DATA_DIR, exist_ok=True)\n",
-    "os.makedirs(MODEL_DIR, exist_ok=True)\n",
-    "os.makedirs(LOG_DIR, exist_ok=True)\n",
-    "\n",
-    "# ========================================\n",
-    "# 🔗 ESPN API\n",
-    "# ========================================\n",
-    "ESPN_SCOREBOARD_URL = (\n",
-    "    \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard\"\n",
-    ")\n",
-    "\n",
-    "# ========================================\n",
-    "# 🏀 TEAM MAP\n",
-    "# ========================================\n",
-    "TEAM_NAME_MAP = {\n",
-    "    \"Atlanta Hawks\": \"ATL\",\n",
-    "    \"Boston Celtics\": \"BOS\",\n",
-    "    \"Brooklyn Nets\": \"BKN\",\n",
-    "    \"Charlotte Hornets\": \"CHA\",\n",
-    "    \"Chicago Bulls\": \"CHI\",\n",
-    "    \"Cleveland Cavaliers\": \"CLE\",\n",
-    "    \"Dallas Mavericks\": \"DAL\",\n",
-    "    \"Denver Nuggets\": \"DEN\",\n",
-    "    \"Detroit Pistons\": \"DET\",\n",
-    "    \"Golden State Warriors\": \"GSW\",\n",
-    "    \"Houston Rockets\": \"HOU\",\n",
-    "    \"Indiana Pacers\": \"IND\",\n",
-    "    \"LA Clippers\": \"LAC\",\n",
-    "    \"Los Angeles Lakers\": \"LAL\",\n",
-    "    \"Memphis Grizzlies\": \"MEM\",\n",
-    "    \"Miami Heat\": \"MIA\",\n",
-    "    \"Milwaukee Bucks\": \"MIL\",\n",
-    "    \"Minnesota Timberwolves\": \"MIN\",\n",
-    "    \"New Orleans Pelicans\": \"NOP\",\n",
-    "    \"New York Knicks\": \"NYK\",\n",
-    "    \"Oklahoma City Thunder\": \"OKC\",\n",
-    "    \"Orlando Magic\": \"ORL\",\n",
-    "    \"Philadelphia 76ers\": \"PHI\",\n",
-    "    \"Phoenix Suns\": \"PHX\",\n",
-    "    \"Portland Trail Blazers\": \"POR\",\n",
-    "    \"Sacramento Kings\": \"SAC\",\n",
-    "    \"San Antonio Spurs\": \"SAS\",\n",
-    "    \"Toronto Raptors\": \"TOR\",\n",
-    "    \"Utah Jazz\": \"UTA\",\n",
-    "    \"Washington Wizards\": \"WAS\",\n",
-    "}\n",
-    "\n",
-    "def normalize_team_name(name: str) -> str:\n",
-    "    return TEAM_NAME_MAP.get(name, name[:3].upper())\n",
-    "\n",
-    "# ========================================\n",
-    "# 📥 LIVE GAMES\n",
-    "# ========================================\n",
-    "def get_live_nba_games() -> List[Dict]:\n",
-    "    try:\n",
-    "        r = requests.get(ESPN_SCOREBOARD_URL, timeout=15)\n",
-    "        r.raise_for_status()\n",
-    "        data = r.json()\n",
-    "\n",
-    "        games = []\n",
-    "        for event in data.get(\"events\", []):\n",
-    "            comp = event[\"competitions\"][0]\n",
-    "            status = comp[\"status\"][\"type\"]\n",
-    "\n",
-    "            if status[\"state\"] != \"in\":\n",
-    "                continue\n",
-    "\n",
-    "            teams = comp[\"competitors\"]\n",
-    "            home = next(t for t in teams if t[\"homeAway\"] == \"home\")\n",
-    "            away = next(t for t in teams if t[\"homeAway\"] == \"away\")\n",
-    "\n",
-    "            games.append({\n",
-    "                \"game_id\": event[\"id\"],\n",
-    "                \"home_team\": home[\"team\"][\"displayName\"],\n",
-    "                \"away_team\": away[\"team\"][\"displayName\"],\n",
-    "                \"home_team_code\": normalize_team_name(home[\"team\"][\"displayName\"]),\n",
-    "                \"away_team_code\": normalize_team_name(away[\"team\"][\"displayName\"]),\n",
-    "                \"home_score\": int(home.get(\"score\", 0)),\n",
-    "                \"away_score\": int(away.get(\"score\", 0)),\n",
-    "                \"period\": comp[\"status\"].get(\"period\", 1),\n",
-    "                \"clock\": comp[\"status\"].get(\"displayClock\", \"00:00\"),\n",
-    "                \"status\": status[\"description\"]\n",
-    "            })\n",
-    "        return games\n",
-    "    except Exception:\n",
-    "        return []\n",
-    "\n",
-    "# ========================================\n",
-    "# 🧠 MODEL\n",
-    "# ========================================\n",
-    "def load_best_model():\n",
-    "    model = xgb.Booster()\n",
-    "    model.load_model(os.path.join(MODEL_DIR, \"profit_model.json\"))\n",
-    "\n",
-    "    with open(os.path.join(MODEL_DIR, \"training_results.json\")) as f:\n",
-    "        threshold = json.load(f).get(\"confidence_threshold\", 0.55)\n",
-    "\n",
-    "    features = joblib.load(os.path.join(MODEL_DIR, \"model_features.pkl\"))\n",
-    "\n",
-    "    return model, threshold, features\n",
-    "\n",
-    "# ========================================\n",
-    "# ⏱️ TIME\n",
-    "# ========================================\n",
-    "def get_minutes_played(game):\n",
-    "    period = max(game[\"period\"], 1)\n",
-    "    base = (period - 1) * 12\n",
-    "\n",
-    "    try:\n",
-    "        mm, ss = game[\"clock\"].split(\":\")\n",
-    "        remaining = int(mm) + int(ss) / 60\n",
-    "    except:\n",
-    "        remaining = 6\n",
-    "\n",
-    "    return min(48, base + (12 - remaining))\n",
-    "\n",
-    "# ========================================\n",
-    "# 📊 FEATURES\n",
-    "# ========================================\n",
-    "def load_historical_data():\n",
-    "    path = os.path.join(DATA_DIR, \"nba_modeling_profit.csv\")\n",
-    "    if not os.path.exists(path):\n",
-    "        return pd.DataFrame()\n",
-    "    df = pd.read_csv(path)\n",
-    "    df[\"GAME_DATE\"] = pd.to_datetime(df[\"GAME_DATE\"])\n",
-    "    return df\n",
-    "\n",
-    "def prepare_live_features(game, hist):\n",
-    "    HOME_PPG_10 = 115.1\n",
-    "    AWAY_PPG_10 = 115.1\n",
-    "    HOME_PACE_10 = 100.3\n",
-    "    AWAY_PACE_10 = 100.3\n",
-    "    LEAGUE_PACE_30D = 100.3\n",
-    "\n",
-    "    SIMULATED_LINE = 226.5\n",
-    "    RESIDUAL = 0.0\n",
-    "\n",
-    "    return pd.DataFrame([{\n",
-    "        \"HOME_PPG_10\": HOME_PPG_10,\n",
-    "        \"AWAY_PPG_10\": AWAY_PPG_10,\n",
-    "        \"HOME_PACE_10\": HOME_PACE_10,\n",
-    "        \"AWAY_PACE_10\": AWAY_PACE_10,\n",
-    "        \"LEAGUE_PACE_30D\": LEAGUE_PACE_30D,\n",
-    "        \"SIMULATED_LINE\": SIMULATED_LINE,\n",
-    "        \"RESIDUAL\": RESIDUAL\n",
-    "    }])\n",
-    "\n",
-    "# ========================================\n",
-    "# 🔮 PREDICTION\n",
-    "# ========================================\n",
-    "def predict_game(model, features, threshold, expected_features):\n",
-    "    dmatrix = xgb.DMatrix(features[expected_features])\n",
-    "    prob_over = float(model.predict(dmatrix)[0])\n",
-    "\n",
-    "    return {\n",
-    "        \"prob_over\": prob_over,\n",
-    "        \"bet\": \"OVER\" if prob_over > threshold else \"UNDER\",\n",
-    "        \"confidence\": abs(prob_over - 0.5) * 2\n",
-    "    }\n",
-    "\n",
-    "# ========================================\n",
-    "# 💰 ROI\n",
-    "# ========================================\n",
-    "def calculate_expected_roi(pred, odds=-110):\n",
-    "    win_prob = pred[\"prob_over\"] if pred[\"bet\"] == \"OVER\" else 1 - pred[\"prob_over\"]\n",
-    "    risk = 110\n",
-    "    win = 100\n",
-    "    ev = win_prob * win - (1 - win_prob) * risk\n",
-    "    return {\n",
-    "        \"roi_percent\": ev / risk * 100,\n",
-    "        \"is_positive_ev\": ev > 0,\n",
-    "        \"kelly_fraction\": max(0, min((win_prob * 1.91 - 1) / 0.91, 0.25))\n",
-    "    }\n",
-    "\n",
-    "# ========================================\n",
-    "# 🚀 SINGLE RUN\n",
-    "# ========================================\n",
-    "def run_once():\n",
-    "    model, threshold, features = load_best_model()\n",
-    "    hist = load_historical_data()\n",
-    "    games = get_live_nba_games()\n",
-    "\n",
-    "    results = []\n",
-    "    for g in games:\n",
-    "        f = prepare_live_features(g, hist)\n",
-    "        p = predict_game(model, f, threshold, features)\n",
-    "        roi = calculate_expected_roi(p)\n",
-    "\n",
-    "        results.append({\n",
-    "            \"game\": g,\n",
-    "            \"prediction\": p,\n",
-    "            \"roi\": roi\n",
-    "        })\n",
-    "\n",
-    "    return results\n"
-   ]
-  }
- ],
- "metadata": {
-  "kernelspec": {
-   "display_name": "Python (neural_network)",
-   "language": "python",
-   "name": "neural_network"
-  },
-  "language_info": {
-   "codemirror_mode": {
-    "name": "ipython",
-    "version": 3
-   },
-   "file_extension": ".py",
-   "mimetype": "text/x-python",
-   "name": "python",
-   "nbconvert_exporter": "python",
-   "pygments_lexer": "ipython3",
-   "version": "3.9.25"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 5
+# ========================================
+# 🏀 NBA LIVE BETTING ENGINE (STREAMLIT SAFE)
+# ========================================
+
+import requests
+import pandas as pd
+import numpy as np
+import xgboost as xgb
+import json
+import os
+from datetime import datetime
+from typing import Dict, List
+import joblib
+
+# ========================================
+# PATHS
+# ========================================
+DATA_DIR = "data"
+MODEL_DIR = "models"
+
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# ========================================
+# ESPN API
+# ========================================
+ESPN_SCOREBOARD_URL = (
+    "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+)
+
+# ========================================
+# TEAM MAP
+# ========================================
+TEAM_MAP = {
+    "Atlanta Hawks": "ATL", "Boston Celtics": "BOS", "Brooklyn Nets": "BKN",
+    "Charlotte Hornets": "CHA", "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN", "Detroit Pistons": "DET",
+    "Golden State Warriors": "GSW", "Houston Rockets": "HOU", "Indiana Pacers": "IND",
+    "LA Clippers": "LAC", "Los Angeles Lakers": "LAL", "Memphis Grizzlies": "MEM",
+    "Miami Heat": "MIA", "Milwaukee Bucks": "MIL", "Minnesota Timberwolves": "MIN",
+    "New Orleans Pelicans": "NOP", "New York Knicks": "NYK",
+    "Oklahoma City Thunder": "OKC", "Orlando Magic": "ORL",
+    "Philadelphia 76ers": "PHI", "Phoenix Suns": "PHX",
+    "Portland Trail Blazers": "POR", "Sacramento Kings": "SAC",
+    "San Antonio Spurs": "SAS", "Toronto Raptors": "TOR",
+    "Utah Jazz": "UTA", "Washington Wizards": "WAS"
 }
+
+def norm_team(name: str) -> str:
+    return TEAM_MAP.get(name, name[:3].upper())
+
+# ========================================
+# LIVE GAMES
+# ========================================
+def get_live_games() -> List[Dict]:
+    r = requests.get(ESPN_SCOREBOARD_URL, timeout=15)
+    data = r.json()
+
+    games = []
+    for event in data.get("events", []):
+        comp = event["competitions"][0]
+        status = comp["status"]["type"]
+
+        if status["state"] != "in":
+            continue
+
+        teams = comp["competitors"]
+        home = next(t for t in teams if t["homeAway"] == "home")
+        away = next(t for t in teams if t["homeAway"] == "away")
+
+        games.append({
+            "home_team": home["team"]["displayName"],
+            "away_team": away["team"]["displayName"],
+            "home_score": int(home.get("score", 0)),
+            "away_score": int(away.get("score", 0)),
+            "period": comp["status"].get("period", 1),
+            "clock": comp["status"].get("displayClock", "00:00"),
+        })
+
+    return games
+
+# ========================================
+# MODEL
+# ========================================
+def load_model():
+    model = xgb.Booster()
+    model.load_model(os.path.join(MODEL_DIR, "profit_model.json"))
+    features = joblib.load(os.path.join(MODEL_DIR, "model_features.pkl"))
+    return model, features
+
+# ========================================
+# FEATURES (SIMPLE / SAFE)
+# ========================================
+def make_features():
+    return pd.DataFrame([{
+        "HOME_PPG_10": 115.1,
+        "AWAY_PPG_10": 115.1,
+        "HOME_PACE_10": 100.3,
+        "AWAY_PACE_10": 100.3,
+        "LEAGUE_PACE_30D": 100.3,
+        "SIMULATED_LINE": 226.5,
+        "RESIDUAL": 0.0
+    }])
+
+# ========================================
+# PREDICTION
+# ========================================
+def predict(model, features, expected):
+    dm = xgb.DMatrix(features[expected])
+    p = float(model.predict(dm)[0])
+    return {
+        "prob_over": p,
+        "bet": "OVER" if p > 0.55 else "UNDER",
+        "confidence": abs(p - 0.5) * 2
+    }
+
+# ========================================
+# RUN ONCE (STREAMLIT ENTRY)
+# ========================================
+def run_once():
+    model, expected = load_model()
+    games = get_live_games()
+
+    results = []
+    for g in games:
+        feats = make_features()
+        pred = predict(model, feats, expected)
+        results.append({
+            "game": g,
+            "prediction": pred
+        })
+
+    return results
